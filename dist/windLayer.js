@@ -1,9 +1,9 @@
 /*!
  * author: FDD <smileFDD@gmail.com> 
  * wind-layer v0.0.6
- * build-time: 2018-9-7 15:47
+ * build-time: 2019-3-5 10:25
  * LICENSE: MIT
- * (c) 2017-2018 https://sakitam-fdd.github.io/wind-layer
+ * (c) 2017-2019 https://sakitam-fdd.github.io/wind-layer
  */
 (function (global, factory) {
   typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
@@ -30,23 +30,33 @@
     var MIN_VELOCITY_INTENSITY = params.minVelocity || 0;
     var MAX_VELOCITY_INTENSITY = params.maxVelocity || 10;
     var VELOCITY_SCALE = (params.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1);
+    var OVERLAY_ALPHA = Math.floor(0.4 * 255);
     var MAX_PARTICLE_AGE = params.particleAge || 90;
     var PARTICLE_LINE_WIDTH = params.lineWidth || 1;
     var PARTICLE_MULTIPLIER = params.particleMultiplier || 1 / 300;
     var PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6;
     var FRAME_RATE = params.frameRate || 15,
         FRAME_TIME = 1000 / FRAME_RATE;
-    var defaulColorScale = ["rgb(36,104, 180)", "rgb(60,157, 194)", "rgb(128,205,193 )", "rgb(151,218,168 )", "rgb(198,231,181)", "rgb(238,247,217)", "rgb(255,238,159)", "rgb(252,217,125)", "rgb(255,182,100)", "rgb(252,150,75)", "rgb(250,112,52)", "rgb(245,64,32)", "rgb(237,45,28)", "rgb(220,24,32)", "rgb(180,0,35)"];
-    var colorScale = params.colorScale || defaulColorScale;
+    var defaultColorScale = ["rgb(36,104, 180)", "rgb(60,157, 194)", "rgb(128,205,193 )", "rgb(151,218,168 )", "rgb(198,231,181)", "rgb(238,247,217)", "rgb(255,238,159)", "rgb(252,217,125)", "rgb(255,182,100)", "rgb(252,150,75)", "rgb(250,112,52)", "rgb(245,64,32)", "rgb(237,45,28)", "rgb(220,24,32)", "rgb(180,0,35)"];
+    var defaultOverlayColorScale = [[193, [37, 4, 42]], [206, [41, 10, 130]], [219, [81, 40, 40]], [233.15, [192, 37, 149]], [255.372, [70, 215, 215]], [273.15, [21, 84, 187]], [275.15, [24, 132, 14]], [291, [247, 251, 59]], [298, [235, 167, 21]], [311, [230, 71, 39]], [328, [88, 27, 67]]];
+    var colorScale = params.colorScale || defaultColorScale;
+    var overlayColorScale = params.overlayColorScale || defaultOverlayColorScale;
     var NULL_WIND_VECTOR = [NaN, NaN, null];
     var builder;
     var grid;
     var gridData = params.data;
     var date;
     var λ0, φ0, Δλ, Δφ, ni, nj;
+    var isWind = true;
 
     var setData = function setData(data) {
       gridData = data;
+    };
+
+    var bilinearInterpolateScalar = function bilinearInterpolateScalar(x, y, g00, g10, g01, g11) {
+      var rx = 1 - x;
+      var ry = 1 - y;
+      return g00 * rx * ry + g10 * x * ry + g01 * rx * y + g11 * x * y;
     };
 
     var bilinearInterpolateVector = function bilinearInterpolateVector(x, y, g00, g10, g01, g11) {
@@ -61,7 +71,20 @@
       return [u, v, Math.sqrt(u * u + v * v)];
     };
 
+    var createScalarBuilder = function createScalarBuilder(scalar) {
+      isWind = false;
+      var _data = scalar.data;
+      return {
+        header: scalar.header,
+        interpolate: bilinearInterpolateScalar,
+        data: function data(i) {
+          return _data[i];
+        }
+      };
+    };
+
     var createWindBuilder = function createWindBuilder(uComp, vComp) {
+      isWind = true;
       var uData = uComp.data,
           vData = vComp.data;
       return {
@@ -75,7 +98,8 @@
 
     var createBuilder = function createBuilder(data) {
       var uComp = null,
-          vComp = null;
+          vComp = null,
+          scalar = null;
       data.forEach(function (record) {
         switch (record.header.parameterCategory + "," + record.header.parameterNumber) {
           case "1,2":
@@ -89,10 +113,10 @@
             break;
 
           default:
-
+            scalar = record;
         }
       });
-      return createWindBuilder(uComp, vComp);
+      return scalar != null ? createScalarBuilder(scalar) : createWindBuilder(uComp, vComp);
     };
 
     var buildGrid = function buildGrid(data, callback) {
@@ -165,9 +189,54 @@
       return a - n * Math.floor(a / n);
     };
 
+    var clamp = function clamp(x, range) {
+      return Math.max(range[0], Math.min(x, range[1]));
+    };
+
+    var proportion = function proportion(x, low, high) {
+      return (clamp(x, [low, high]) - low) / (high - low);
+    };
+
     var isMobile = function isMobile() {
       return /android|blackberry|iemobile|ipad|iphone|ipod|opera mini|webos/i.test(navigator.userAgent);
     };
+
+    var colorInterpolator = function colorInterpolator(start, end) {
+      var r = start[0],
+          g = start[1],
+          b = start[2];
+      var Δr = end[0] - r,
+          Δg = end[1] - g,
+          Δb = end[2] - b;
+      return function (i, a) {
+        return [Math.floor(r + i * Δr), Math.floor(g + i * Δg), Math.floor(b + i * Δb), a];
+      };
+    };
+
+    function segmentedColorScale(segments) {
+      var points = [],
+          interpolators = [],
+          ranges = [];
+
+      for (var i = 0; i < segments.length - 1; i++) {
+        points.push(segments[i + 1][0]);
+        interpolators.push(colorInterpolator(segments[i][1], segments[i + 1][1]));
+        ranges.push([segments[i][0], segments[i + 1][0]]);
+      }
+
+      return function (point, alpha) {
+        var i;
+
+        for (i = 0; i < points.length - 1; i++) {
+          if (point <= points[i]) {
+            break;
+          }
+        }
+
+        var range = ranges[i];
+        return interpolators[i](proportion(point, range[0], range[1]), alpha);
+      };
+    }
 
     var distort = function distort(projection, λ, φ, x, y, scale, wind, windy) {
       var u = wind[0] * scale;
@@ -189,7 +258,35 @@
       return [(pλ[0] - x) / hλ / k, (pλ[1] - y) / hλ / k, (pφ[0] - x) / hφ, (pφ[1] - y) / hφ];
     };
 
-    var createField = function createField(columns, bounds, callback) {
+    var createMask = function createMask(bounds) {
+      var canvas = document.createElement('canvas');
+      var width = bounds.width;
+      var height = bounds.height;
+      canvas.width = width;
+      canvas.height = height;
+      var context = canvas.getContext("2d");
+      context.fillStyle = "rgba(255, 0, 0, 1)";
+      context.fill();
+      var imageData = context.getImageData(0, 0, width, height);
+      var data = imageData.data;
+      return {
+        imageData: imageData,
+        isVisible: function isVisible(x, y) {
+          var i = (y * width + x) * 4;
+          return data[i + 3] > 0;
+        },
+        set: function set(x, y, rgba) {
+          var i = (y * width + x) * 4;
+          data[i] = rgba[0];
+          data[i + 1] = rgba[1];
+          data[i + 2] = rgba[2];
+          data[i + 3] = rgba[3];
+          return this;
+        }
+      };
+    };
+
+    var createField = function createField(columns, bounds, mask, callback) {
       function field(x, y) {
         var column = columns[Math.round(x)];
         return column && column[Math.round(y)] || NULL_WIND_VECTOR;
@@ -213,6 +310,7 @@
         return o;
       };
 
+      field.overlay = mask.imageData;
       callback(bounds, field);
     };
 
@@ -280,6 +378,7 @@
     };
 
     var interpolateField = function interpolateField(grid, bounds, extent, callback) {
+      var mask = createMask(bounds);
       var projection = {};
       var mapArea = (extent.south - extent.north) * (extent.west - extent.east);
       var velocityScale = VELOCITY_SCALE * Math.pow(mapArea, 0.4);
@@ -291,6 +390,7 @@
 
         for (var y = bounds.y; y <= bounds.yMax; y += 2) {
           var coord = invert(x, y, extent);
+          var color = [0, 0, 0, 0];
 
           if (coord) {
             var λ = coord[0],
@@ -298,13 +398,24 @@
 
             if (isFinite(λ)) {
               var wind = grid.interpolate(λ, φ);
+              var scalar = null;
 
               if (wind) {
-                wind = distort(projection, λ, φ, x, y, velocityScale, wind, extent);
-                column[y + 1] = column[y] = wind;
+                if (isWind) {
+                  wind = distort(projection, λ, φ, x, y, velocityScale, wind, extent);
+                  column[y + 1] = column[y] = wind;
+                } else {
+                  scalar = wind;
+                }
+              }
+
+              if (isValue(scalar)) {
+                color = segmentedColorScale(overlayColorScale)(scalar, OVERLAY_ALPHA);
               }
             }
           }
+
+          mask.set(x, y, color).set(x + 1, y, color).set(x, y + 1, color).set(x + 1, y + 1, color);
         }
 
         columns[x + 1] = columns[x] = column;
@@ -323,7 +434,7 @@
           }
         }
 
-        createField(columns, bounds, callback);
+        createField(columns, bounds, mask, callback);
       })();
     };
 
@@ -432,6 +543,16 @@
       })();
     };
 
+    var overlay = function overlay(bounds, field) {
+      if (!field) return;
+      var canvas = params.canvas,
+          w = canvas.width,
+          h = canvas.height,
+          ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, w, h);
+      ctx.putImageData(field.overlay, 0, 0);
+    };
+
     var updateData = function updateData(data, bounds, width, height, extent) {
       delete params.data;
       params.data = data;
@@ -451,7 +572,12 @@
       buildGrid(gridData, function (grid) {
         interpolateField(grid, buildBounds(bounds, width, height), mapBounds, function (bounds, field) {
           windy.field = field;
-          animate(bounds, field);
+
+          if (isWind) {
+            animate(bounds, field);
+          } else {
+            overlay(bounds, field);
+          }
         });
       });
     };
@@ -587,12 +713,12 @@
         state: options.state,
         attributions: options.attributions,
         resolutions: options.resolutions,
-        canvasFunction: _this.canvasFunction.bind(_assertThisInitialized(_assertThisInitialized(_this))),
+        canvasFunction: _this.canvasFunction.bind(_assertThisInitialized(_this)),
         projection: options.hasOwnProperty('projection') ? options.projection : 'EPSG:3857',
         ratio: options.hasOwnProperty('ratio') ? options.ratio : 1
       }));
 
-      _this.on('precompose', _this.redraw, _assertThisInitialized(_assertThisInitialized(_this)));
+      _this.on('precompose', _this.redraw, _assertThisInitialized(_this));
 
       return _this;
     }
