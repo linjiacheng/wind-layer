@@ -51,9 +51,9 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/openlayers/dist/ol.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.js"></script>
-<!--<script src="./lib/windLayer.js"></script>-->
+<script src="./lib/windLayer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/moment@2.20.1/moment.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/wind-layer@0.0.5/dist/windLayer.js"></script>
+<!--<script src="https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/windLayer.js"></script>-->
 ">
 <script>
   var Maps = new ol.Map({
@@ -78,7 +78,7 @@
     })
   });
   var wind, data;
-  axios.get('http://localhost:3000/getdata', {
+  axios.get('http://192.168.35.128:8080/getdata', {
     params: {
       time: moment.utc().valueOf()
     }
@@ -87,8 +87,7 @@
       data = res.data.data;
       wind = new windLayer.OlWind(data, {
         layerName: 'data',
-        projection: 'EPSG:4326',
-        ratio: 1,
+        ratio: window.devicePixelRatio,
         map: Maps
       });
       wind.appendTo(Maps);

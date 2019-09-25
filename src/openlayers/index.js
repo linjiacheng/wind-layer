@@ -45,7 +45,7 @@ class OlWind extends ol.layer.Image {
       attributions: options.attributions,
       resolutions: options.resolutions,
       canvasFunction: this.canvasFunction.bind(this),
-      projection: (options.hasOwnProperty('projection') ? options.projection : 'EPSG:3857'),
+      // projection: (options.hasOwnProperty('projection') ? options.projection : 'EPSG:3857'),
       ratio: (options.hasOwnProperty('ratio') ? options.ratio : 1)
     }));
     this.on('precompose', this.redraw, this);
@@ -62,7 +62,7 @@ class OlWind extends ol.layer.Image {
   /**
    * set layer data
    * @param data
-   * @returns {WindyLayer}
+   * @returns {OlWind}
    */
   setData (data) {
     const _map = this.getMap();
@@ -87,16 +87,32 @@ class OlWind extends ol.layer.Image {
 
   /**
    * render windy layer
-   * @returns {WindyLayer}
+   * @returns {OlWind}
    */
   render (canvas) {
     const extent = this._getExtent();
     if (this.isClear || !this.getData() || !extent) return this;
     if (canvas && !this.$Windy) {
+      const {
+        minVelocity,
+        maxVelocity,
+        velocityScale,
+        particleAge,
+        lineWidth,
+        particleMultiplier,
+        colorScale
+      } = this.options;
       this.$Windy = new Windy({
         canvas: canvas,
-        projection: this.get('projection'),
-        data: this.getData()
+        projection: this._getProjectionCode(),
+        data: this.getData(),
+        minVelocity,
+        maxVelocity,
+        velocityScale,
+        particleAge,
+        lineWidth,
+        particleMultiplier,
+        colorScale
       });
       this.$Windy.start(extent[0], extent[1], extent[2], extent[3]);
     } else if (canvas && this.$Windy) {
@@ -148,7 +164,7 @@ class OlWind extends ol.layer.Image {
     const size = this._getMapSize();
     const _extent = this._getMapExtent();
     if (size && _extent) {
-      const _projection = this.get('projection');
+      const _projection = this._getProjectionCode();
       const extent = ol.proj.transformExtent(_extent, _projection, 'EPSG:4326');
       return [[[0, 0], [size[0], size[1]]], size[0], size[1], [[extent[0], extent[1]], [extent[2], extent[3]]]];
     } else {
@@ -185,6 +201,7 @@ class OlWind extends ol.layer.Image {
   appendTo (map) {
     if (map && map instanceof ol.Map) {
       this.set('originMap', map);
+      this.getSource().projection_ = this._getProjectionCode();
       map.addLayer(this);
     } else {
       throw new Error('not map object');
@@ -194,9 +211,10 @@ class OlWind extends ol.layer.Image {
   /**
    * get mouse point data
    * @param coordinates
-   * @returns {{direction: number, speed: *}}
+   * @returns {null|{speed: (*|number), direction}}
    */
   getPointData (coordinates) {
+    if (!this.$Windy) return null;
     const gridValue = this.$Windy.interpolatePoint(coordinates[0], coordinates[1]);
     if (gridValue && !isNaN(gridValue[0]) && !isNaN(gridValue[1]) && gridValue[2]) {
       return {
@@ -249,6 +267,65 @@ class OlWind extends ol.layer.Image {
    */
   getMap () {
     return this.get('originMap');
+  }
+
+  _getProjectionCode () {
+    let code = '';
+    const map = this.getMap();
+    if (map) {
+      code =
+        map.getView() &&
+        map
+          .getView()
+          .getProjection()
+          .getCode();
+    } else {
+      code = 'EPSG:3857';
+    }
+    return code;
+  }
+
+  /**
+   * update windy config
+   * @param params
+   * @returns {OlWind}
+   */
+  updateParams (params) {
+    this.options = Object.assign(this.options, params);
+    if (this.$Windy) {
+      const {
+        minVelocity, // 粒子强度最小的速度 (m/s)
+        maxVelocity, // 粒子强度最大的速度 (m/s)
+        velocityScale, // 风速的比例
+        particleAge, // 重绘之前生成的离子数量的最大帧数
+        lineWidth, // 绘制粒子的线宽
+        particleMultiplier, // 离子数量
+        colorScale
+      } = this.options;
+      if (this.$Windy) {
+        this.$Windy.updateParams({
+          minVelocity,
+          maxVelocity,
+          velocityScale,
+          particleAge,
+          lineWidth,
+          particleMultiplier,
+          colorScale
+        });
+        if (this.getMap() && this._canvas && this.data) {
+          this.render(this._canvas);
+        }
+      }
+    }
+    return this;
+  }
+
+  /**
+   * get windy config
+   * @returns {null|*|Windy.params|{velocityScale, minVelocity, maxVelocity, colorScale, particleAge, lineWidth, particleMultiplier}}
+   */
+  getParams () {
+    return this.$Windy && this.$Windy.getParams();
   }
 }
 

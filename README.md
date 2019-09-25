@@ -1,6 +1,11 @@
 # wind-layer
 
-> a [openlayers](http://openlayers.org) | [bmap](https://map.baidu.com/) | [amap](https://ditu.amap.com/) extension to windjs
+> a [openlayers](http://openlayers.org) | [bmap](https://map.baidu.com/) | [amap](https://ditu.amap.com/) | [maptalks](https://maptalks.org/) extension to windjs
+
+> 示例：[openlayers](//sakitam-fdd.github.io/wind-layer/examples/index.html) |
+ [bmap](//sakitam-fdd.github.io/wind-layer/examples/baidu.html) |
+  [amap](//sakitam-fdd.github.io/wind-layer/examples/amap.html) | 
+  [maptalks](//sakitam-fdd.github.io/wind-layer/examples/maptalks.html)
 
 [![Build Status](https://travis-ci.org/sakitam-fdd/wind-layer.svg?branch=master)](https://www.travis-ci.org/sakitam-fdd/wind-layer)
 [![NPM downloads](https://img.shields.io/npm/dm/wind-layer.svg)](https://npmjs.org/package/wind-layer)
@@ -12,7 +17,6 @@
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsakitam-fdd%2Fwind-layer.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsakitam-fdd%2Fwind-layer?ref=badge_shield)
 
 ## 下载
-
 
 ```bash
 git clone https://github.com/sakitam-fdd/wind-layer.git
@@ -35,24 +39,35 @@ import {
   BMapWind, // bmap
   OlWind // openlayers
 } from 'wind-layer'
+
+// ol5 & ol6
+import OlWindy from 'wind-layer/dist/OlWindy.js'
+import OlWindy from 'wind-layer/dist/OlWindy.esm.js'
+
+// maptalks
+import MaptalksWindy from 'wind-layer/dist/MaptalksWindy.js'
+import MaptalksWindy from 'wind-layer/dist/MaptalksWindy.esm.js'
+
 ```
 
 #### cdn
 
-目前可通过 [unpkg.com](https://unpkg.com/wind-layer/dist/windLayer.js) / [jsdelivr](https://cdn.jsdelivr.net/npm/wind-layer@0.0.1/dist/windLayer.js) 获取最新版本的资源。
+目前可通过 [unpkg.com](https://unpkg.com/wind-layer/dist/windLayer.js) /
+ [jsdelivr](https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/windLayer.js) 获取最新版本的资源。
 
 ```bash
 // jsdelivr (jsdelivr由于缓存原因最好锁定版本号，否则可能会出现意料之外的问题)
-https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/windLayer.js
-https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/windLayer.min.js
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/windLayer.js
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/windLayer.min.js
 // npm
 https://unpkg.com/wind-layer/dist/windLayer.js
 https://unpkg.com/wind-layer/dist/windLayer.min.js
 
 // 分模块
-https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/AMapWind.js // amap
-https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/BMapWind.js // bmap
-https://cdn.jsdelivr.net/npm/wind-layer@0.0.6/dist/OlWind.js // openlayers
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/AMapWind.js // amap
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/BMapWind.js // bmap
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/OlWind.js // openlayers
+https://cdn.jsdelivr.net/npm/wind-layer@0.1.0/dist/MaptalksWindy.js // maptalks
 ```
 
 #### [![示例](https://sakitam-fdd.github.io/wind-layer/windy.jpg)](https://jsfiddle.net/sakitamfdd/hgvdu76j/?utm_source=website&utm_medium=embed&utm_campaign=hgvdu76j)
@@ -83,7 +98,7 @@ cp current-wind-surface-level-gfs-1.0.json <earth-git-repository>/public/data/we
   目前仅抓取少量数据, 全部数据数据量过大会造成抓取时间过长和转换失败。
 
 ```bash
-npm run dev:server // 调试环境启动服务
+npm run start // 调试环境启动服务
 npm run prd:server // 部署环境启动服务
 ```
 
@@ -98,6 +113,53 @@ npm run prd:server // 部署环境启动服务
 | `getSourceTree` | `null` | 无需参数，获取抓取的数据源 `grib2` 源数据。返回一个list，包含文件名和服务器地址。 |
 | `getParseTree` | `null` | 无需参数，获取转换后的 `json` 数据。返回一个list，包含文件名和服务器地址。 |
 | `getDataByFileName` | `{ filename }` | 通过文件名请求 `json` 数据，文件名可为源数据文件和json文件名 |
+
+## 使用Docker
+
+### 简单运行
+
+> 如果想简单的运行一下看看，可以执行这个命令：
+
+```bash
+docker run -d -p 8080:3333 sakitamclone/wind-server:0.0.1
+```
+
+启动后就可以通过主机的 8080 端口看到运行结果了，比如用的是本机 Docker 的话，访问：http://localhost:8080 即可。
+
+测试结束后，彻底清除容器可以用命令：
+
+```bash
+docker rm -fv <容器ID>
+```
+
+这样可以停止、删除容器，并清除数据。
+
+### 使用 DockerCompose
+
+新建文件 ``docker-compose.yml``, 内容如下：
+
+```yaml
+version: '3'
+
+services:
+  wind-server:
+    image: sakitamclone/wind-server:0.0.1
+    build:
+      context: ./
+      args:
+        NODE_ENV: development
+    hostname: wind-server
+    environment:
+      - CORS_ORIGIN=****
+    ports:
+      - "8080:3333"
+
+volumes:
+  yarn:
+
+```
+
+然后使用命令 docker-compose up -d 来启动，停止服务使用 docker-compose down。
 
 ## Resources
 

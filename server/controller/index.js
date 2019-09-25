@@ -12,6 +12,68 @@ utils.checkFolderExist(utils.resolve(config.staticDir + config.parseDataDir), tr
 utils.checkFolderExist(utils.resolve(config.staticDir + config.sourceDataDir), true);
 
 /**
+ * walkFetch
+ * @param time
+ * @returns {Promise<any>}
+ */
+const walkFetch = time => {
+  let [subTime, index] = [time, 0];
+  async function walk_ () {
+    if (index > 0) {
+      subTime = moment(subTime).subtract(6, 'hours')
+    }
+    index++;
+    try {
+      const data = await fetchGribData({
+        time: subTime
+      });
+      return data;
+    } catch (e) {
+      const data = await walk_();
+      return data;
+    }
+  }
+  return new Promise(resolve => {
+    walk_().then(res => {
+      resolve(res);
+    })
+  });
+};
+
+/**
+ * 异步重试
+ * @param time
+ * @param num
+ * @returns {Promise<any>}
+ */
+const walkRetry = (time, num) => {
+  let index = 0;
+  async function walk_ () {
+    index++;
+    try {
+      const data = await fetchGribData({
+        time: time
+      });
+      return data;
+    } catch (e) {
+      if (index > num) {
+        return Promise.reject(e)
+      } else {
+        const data = await walk_();
+        return data;
+      }
+    }
+  }
+  return new Promise((resolve, reject) => {
+    walk_().then(res => {
+      resolve(res);
+    }).catch(error => {
+      reject(error);
+    })
+  });
+};
+
+/**
  * 获取数据源文件
  * @param ctx
  * @param next
@@ -20,9 +82,7 @@ utils.checkFolderExist(utils.resolve(config.staticDir + config.sourceDataDir), t
 const getGribData = async (ctx, next) => {
   const _time = (ctx.query.time && moment.utc(moment(parseInt(ctx.query.time))));
   try {
-    const _data = await fetchGribData({
-      time: _time
-    });
+    const _data = await walkRetry(_time, 5); // 重试次数默认为5次
     ctx.status = 200;
     ctx.body = {
       code: 200,
@@ -60,6 +120,12 @@ const getLocalData = (path) => {
   })
 };
 
+/**
+ * transform data
+ * @param path_
+ * @param options
+ * @returns {Promise<any>}
+ */
 const grib2json = (path_, options) => {
   return new Promise((resolve, reject) => {
     execFile(`${grib2jsonCommand}`, ['--data', '--output', options.output, '--names', '--compact', path_],
@@ -113,14 +179,17 @@ const getData = async (ctx, next) => {
           output: _parsePath
         })
       } else {
-        const _source = await fetchGribData({
-          time: _time
-        });
+        const _source = await walkFetch(_time);
         if (_source && _source.code === 200) {
-          _json = await grib2json(utils.resolve(config.staticDir + config.sourceDataDir + _source.data.name), {
-            data: true,
-            output: _parsePath
-          })
+          const reallyParse = utils.resolve(config.staticDir + config.parseDataDir + _source.data.time + '.json');
+          try {
+            _json = await grib2json(utils.resolve(config.staticDir + config.sourceDataDir + _source.data.name), {
+              data: true,
+              output: reallyParse
+            })
+          } catch (e) {
+            fs.remove(reallyParse);
+          }
         }
       }
       ctx.status = 200;
@@ -193,20 +262,14 @@ const fetchGribData = params => {
               file: 'gfs.t' + hours + 'z.pgrb2.1p00.f000',
               leftlon: config.extent[0], // 经度
               rightlon: config.extent[2],
-              toplat: config.extent[1], // 纬度
-              bottomlat: config.extent[3],
+              toplat: config.extent[3], // 纬度
+              bottomlat: config.extent[1],
               dir: '/gfs.' + stamp
             }, config.requestParams)
           }).then(response => {
             if (response.status !== 200) {
               console.log('current data not Exist');
-              fetchGribData({
-                time: moment(_time).subtract(6, 'hours')
-              }).then(_res => {
-                if (_res && _res.code === 200) {
-                  resolve(_res)
-                }
-              })
+              reject(response);
             } else {
               utils.checkFolderExist(utils.resolve(config.staticDir + config.sourceDataDir), true);
               // 此时part为返回的流对象
@@ -216,6 +279,7 @@ const fetchGribData = params => {
               // 写入文件流
               response.data.pipe(stream);
               stream.on('finish', function () {
+                stream.close();
                 resolve({
                   code: 200,
                   success: true,
@@ -227,14 +291,8 @@ const fetchGribData = params => {
                 })
               })
             }
-          }).catch(() => {
-            fetchGribData({
-              time: moment(_time).subtract(6, 'hours')
-            }).then(_res => {
-              if (_res && _res.code === 200) {
-                resolve(_res)
-              }
-            })
+          }).catch((error) => {
+            reject(error);
           })
         }
       })
@@ -307,12 +365,21 @@ const getDataByFileName = async (ctx, next) => {
     const _parsePath = utils.resolve(config.staticDir + config.parseDataDir + ctx.query.filename);
     const _parseExist = utils.checkFileExists(_parsePath);
     if (_parseExist) {
-      const _data = await getLocalData(_parsePath);
-      ctx.status = 200;
-      ctx.body = {
-        code: 200,
-        success: true,
-        data: _data
+      try {
+        const _data = await getLocalData(_parsePath);
+        ctx.status = 200;
+        ctx.body = {
+          code: 200,
+          success: true,
+          data: _data
+        }
+      } catch (e) {
+        ctx.status = 500;
+        ctx.body = {
+          code: 500,
+          success: true,
+          data: e
+        }
       }
     } else {
       ctx.status = 200;
@@ -328,15 +395,24 @@ const getDataByFileName = async (ctx, next) => {
     const _sourceExist = utils.checkFileExists(_sourcePath);
     const _parsePath = utils.resolve(config.staticDir + config.parseDataDir + ctx.query.filename.replace('.f000', '.json'));
     if (_sourceExist) {
-      const _data = await grib2json(_sourcePath, {
-        data: true,
-        output: _parsePath
-      });
-      ctx.status = 200;
-      ctx.body = {
-        code: 200,
-        success: true,
-        data: _data
+      try {
+        const _data = await grib2json(_sourcePath, {
+          data: true,
+          output: _parsePath
+        });
+        ctx.status = 200;
+        ctx.body = {
+          code: 200,
+          success: true,
+          data: _data
+        }
+      } catch (e) {
+        ctx.status = 500;
+        ctx.body = {
+          code: 500,
+          success: true,
+          data: e
+        }
       }
     } else {
       ctx.status = 200;
