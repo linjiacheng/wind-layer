@@ -1,7 +1,7 @@
 /*!
  * author: sakitam-fdd <smilefdd@gmail.com> 
  * wind-layer v0.1.0
- * build-time: 2019-5-25 22:8
+ * build-time: 2019-9-25 16:10
  * LICENSE: MIT
  * (c) 2017-2019 https://sakitam-fdd.github.io/wind-layer
  */
@@ -30,7 +30,7 @@
 
     that.canvas = params.canvas;
 
-    var defaulColorScale = [
+    var defaultColorScale = [
       "rgb(36,104, 180)",
       "rgb(60,157, 194)",
       "rgb(128,205,193 )",
@@ -48,6 +48,20 @@
       "rgb(180,0,35)"
     ];
 
+    var defaultOverlayColorScale = [
+      [193,     [37, 4, 42]],
+      [206,     [41, 10, 130]],
+      [219,     [81, 40, 40]],
+      [233.15,  [192, 37, 149]],  // -40 C/F
+      [255.372, [70, 215, 215]],  // 0 F
+      [273.15,  [21, 84, 187]],   // 0 C
+      [275.15,  [24, 132, 14]],   // just above 0 C
+      [291,     [247, 251, 59]],
+      [298,     [235, 167, 21]],
+      [311,     [230, 71, 39]],
+      [328,     [88, 27, 67]]
+    ];
+
     var buildParams = function(params) {
       if (!params.projection) { params.projection = 'EPSG:4326'; }
       that.MIN_VELOCITY_INTENSITY = params.minVelocity || 0;                      // velocity at which particle intensity is minimum (m/s)
@@ -58,7 +72,9 @@
       that.PARTICLE_MULTIPLIER = params.particleMultiplier || 1 / 300;            // particle count scalar (completely arbitrary--this values looks nice)
       that.PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6);   // multiply particle count for mobiles by this amount
       that.FRAME_RATE = params.frameRate || 16;
-      that.COLOR_SCALE = params.colorScale || defaulColorScale;
+      that.COLOR_SCALE = params.colorScale || defaultColorScale;
+      that.OVERLAY_COLOR_SCALE = params.overlayColorScale || defaultOverlayColorScale;
+      that.OVERLAY_ALPHA = Math.floor(0.6*255);                                   // overlay transparency (on scale [0, 255])
     };
 
     buildParams(params);
@@ -78,6 +94,12 @@
       gridData = data;
     };
 
+    var bilinearInterpolateScalar = function (x, y, g00, g10, g01, g11) {
+      var rx = (1 - x);
+      var ry = (1 - y);
+      return g00 * rx * ry + g10 * x * ry + g01 * rx * y + g11 * x * y;
+    };
+
     // interpolation for vectors like wind (u,v,m)
     var bilinearInterpolateVector = function (x, y, g00, g10, g01, g11) {
       var rx = (1 - x);
@@ -88,8 +110,20 @@
       return [u, v, Math.sqrt(u * u + v * v)];
     };
 
+    var createScalarBuilder = function (scalar) {
+      isWind = false;
+      var data = scalar.data;
+      return {
+        header: scalar.header,
+        interpolate: bilinearInterpolateScalar,
+        data: function(i) {
+          return data[i];
+        }
+      }
+    };
 
     var createWindBuilder = function (uComp, vComp) {
+      isWind = true;
       var uData = uComp.data, vData = vComp.data;
       return {
         header: uComp.header,
@@ -102,7 +136,7 @@
     };
 
     var createBuilder = function (data) {
-      var uComp = null, vComp = null;
+      var uComp = null, vComp = null, scalar = null;
 
       data.forEach(function (record) {
         switch (record.header.parameterCategory + "," + record.header.parameterNumber) {
@@ -119,7 +153,7 @@
         }
       });
 
-      return createWindBuilder(uComp, vComp);
+      return scalar != null ? createScalarBuilder(scalar) : createWindBuilder(uComp, vComp);
     };
 
     var buildGrid = function (data, callback) {
@@ -211,11 +245,68 @@
     };
 
     /**
+     * @returns {Number} the value x clamped to the range [low, high].
+     */
+    var clamp = function (x, range) {
+      return Math.max(range[0], Math.min(x, range[1]));
+    };
+
+    /**
+     * @returns {number} the fraction of the bounds [low, high] covered by the value x, after clamping x to the
+     *          bounds. For example, given bounds=[10, 20], this method returns 1 for x>=20, 0.5 for x=15 and 0
+     *          for x<=10.
+     */
+    var proportion = function (x, low, high) {
+      return (clamp(x, [low, high]) - low) / (high - low);
+    };
+    /**
      * @returns {Boolean} true if agent is probably a mobile device. Don't really care if this is accurate.
      */
     var isMobile = function () {
       return (/android|blackberry|iemobile|ipad|iphone|ipod|opera mini|webos/i).test(navigator.userAgent);
     };
+
+
+    var colorInterpolator = function (start, end) {
+      var r = start[0], g = start[1], b = start[2];
+      var Δr = end[0] - r, Δg = end[1] - g, Δb = end[2] - b;
+      return function(i, a) {
+          return [Math.floor(r + i * Δr), Math.floor(g + i * Δg), Math.floor(b + i * Δb), a];
+      };
+    };
+
+    /**
+     * Creates a color scale composed of the specified segments. Segments is an array of two-element arrays of the
+     * form [value, color], where value is the point along the scale and color is the [r, g, b] color at that point.
+     * For example, the following creates a scale that smoothly transitions from red to green to blue along the
+     * points 0.5, 1.0, and 3.5:
+     *
+     *     [ [ 0.5, [255, 0, 0] ],
+     *       [ 1.0, [0, 255, 0] ],
+     *       [ 3.5, [0, 0, 255] ] ]
+     *
+     * @param segments array of color segments
+     * @returns {Function} a function(point, alpha) that returns the color [r, g, b, alpha] for the given point.
+     */
+    function segmentedColorScale(segments) {
+      var points = [], interpolators = [], ranges = [];
+      for (var i = 0; i < segments.length - 1; i++) {
+          points.push(segments[i+1][0]);
+          interpolators.push(colorInterpolator(segments[i][1], segments[i+1][1]));
+          ranges.push([segments[i][0], segments[i+1][0]]);
+      }
+
+      return function(point, alpha) {
+          var i;
+          for (i = 0; i < points.length - 1; i++) {
+              if (point <= points[i]) {
+                  break;
+              }
+          }
+          var range = ranges[i];
+          return interpolators[i](proportion(point, range[0], range[1]), alpha);
+      };
+    }
 
     /**
      * Calculate distortion of the wind vector caused by the shape of the projection at point (x, y). The wind
@@ -253,7 +344,36 @@
       ];
     };
 
-    var createField = function (columns, bounds, callback) {
+    var createMask = function (bounds) {
+      var canvas = document.createElement('canvas');
+      var width = bounds.width;
+      var height = bounds.height;
+      canvas.width = width;
+      canvas.height = height;
+      var context = canvas.getContext("2d");
+      context.fillStyle = "rgba(255, 0, 0, 1)";
+      context.fill();
+
+      var imageData = context.getImageData(0, 0, width, height);
+      var data = imageData.data;  // layout: [r, g, b, a, r, g, b, a, ...]
+      return {
+          imageData: imageData,
+          isVisible: function(x, y) {
+              var i = (y * width + x) * 4;
+              return data[i + 3] > 0;  // non-zero alpha means pixel is visible
+          },
+          set: function(x, y, rgba) {
+              var i = (y * width + x) * 4;
+              data[i    ] = rgba[0];
+              data[i + 1] = rgba[1];
+              data[i + 2] = rgba[2];
+              data[i + 3] = rgba[3];
+              return this;
+          }
+      };
+    };
+
+    var createField = function (columns, bounds, mask, callback) {
 
       /**
        * @returns {Array} wind vector [u, v, magnitude] at the point (x, y), or [NaN, NaN, null] if wind
@@ -283,6 +403,7 @@
       };
 
       field.overlay = mask.imageData;
+
       callback(bounds, field);
     };
 
@@ -346,6 +467,8 @@
 
     var interpolateField = function (grid, bounds, extent, callback) {
 
+      var mask = createMask(bounds);
+
       var projection = {};
       var mapArea = ((extent.south - extent.north) * (extent.west - extent.east));
       var velocityScale = that.VELOCITY_SCALE * Math.pow(mapArea, 0.4);
@@ -357,19 +480,27 @@
         var column = [];
         for (var y = bounds.y; y <= bounds.yMax; y += 2) {
           var coord = invert(x, y, extent);
+          var color = [0, 0, 0, 0];
           if (coord) {
             var λ = coord[0], φ = coord[1];
             if (isFinite(λ)) {
               var wind = grid.interpolate(λ, φ);
+              var scalar = null;
               if (wind) {
-                wind = distort(projection, λ, φ, x, y, velocityScale, wind, extent);
-                column[y + 1] = column[y] = wind;
-
+                if (isWind) {
+                  wind = distort(projection, λ, φ, x, y, velocityScale, wind, extent);
+                  column[y + 1] = column[y] = wind;
+                }
+                else {
+                  scalar = wind;
+                }
+              }
+              if(isValue(scalar)) {
+                color = (segmentedColorScale(that.OVERLAY_COLOR_SCALE))(scalar, OVERLAY_ALPHA);
               }
             }
           }
-
-          mask.set(x, y, color).set(x + 1, y, color).set(x, y + 1, color).set(x + 1, y + 1, color);
+          mask.set(x, y, color).set(x+1, y, color).set(x, y+1, color).set(x+1, y+1, color);
         }
         columns[x + 1] = columns[x] = column;
       }
@@ -384,7 +515,7 @@
             return;
           }
         }
-        createField(columns, bounds, callback);
+        createField(columns, bounds, mask, callback);
       })();
     };
 
@@ -496,6 +627,14 @@
       })();
     };
 
+    var overlay = function (bounds, field) {
+      if (!field) { return; }
+
+      var canvas = params.canvas, w = canvas.width, h = canvas.height, ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, w, h);
+      ctx.putImageData(field.overlay, 0, 0);
+    };
+
     var updateData = function (data, bounds, width, height, extent) {
       delete that.params.data;
       that.params.data = data;
@@ -521,12 +660,13 @@
         interpolateField(grid, buildBounds(bounds, width, height), mapBounds, function (bounds, field) {
           // animate the canvas with random points
           windy.field = field;
-
-          if (isWind) {
+          if(isWind) {
             animate(bounds, field);
-          } else {
+          }
+          else {
             overlay(bounds, field);
           }
+          
         });
 
       });
