@@ -481,7 +481,7 @@ const Windy = function (params = {}) {
               }
             }
             if(isValue(scalar)) {
-              color = (segmentedColorScale(that.OVERLAY_COLOR_SCALE))(scalar, OVERLAY_ALPHA);
+              color = (segmentedColorScale(that.OVERLAY_COLOR_SCALE))(scalar, that.OVERLAY_ALPHA);
             }
           }
         }
